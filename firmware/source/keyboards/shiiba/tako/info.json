@@ -1,0 +1,28 @@
+{
+    "keyboard_name": "Tako",
+    "manufacturer": "shiiba", 
+    "url": "",
+    "maintainer": "shiiba",
+    "usb": {
+        "vid": "0xFEED",
+        "pid": "0x5A60",
+        "device_version": "1.0.0"
+    },
+    "processor": "RP2040",
+    "bootloader": "rp2040",
+    "pointing_device": {
+        "driver": "pmw3360"
+    },
+    "layouts": {
+        "LAYOUT_direct": {
+            "layout": [
+                {"matrix": [0, 0], "x": 0, "y": 0},
+                {"matrix": [0, 1], "x": 1, "y": 0},
+                {"matrix": [0, 2], "x": 2, "y": 0},
+                {"matrix": [0, 3], "x": 3, "y": 0},
+                {"matrix": [0, 4], "x": 4, "y": 0},
+                {"matrix": [0, 5], "x": 5, "y": 0}
+            ]
+        }
+    }
+}
