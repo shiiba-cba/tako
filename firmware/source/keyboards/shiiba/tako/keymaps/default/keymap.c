@@ -1,72 +1,94 @@
 #include QMK_KEYBOARD_H
-#include "pointing_device.h"
 
+/* ───── レイヤー定義 ───── */
+enum layer_names { _BASE, _SCROLL };
+
+/* ───── 独自キーコード ───── */
 enum custom_keycodes {
-    DRAG_SCROLL = SAFE_RANGE,
+    CPI_TGL = SAFE_RANGE,   // 左クリック置換（既存）
+    SCRL_MODE               // スクロール方向切替
 };
 
+/* ───── キーマップ ───── */
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
-    [0] = LAYOUT_direct(
-        KC_BTN1,        // GP14 - 左クリック
-        KC_BTN2,        // GP15 - 右クリック
-        KC_BTN3,        // GP26 - 中クリック
-        KC_BTN4,        // GP27 - 戻る
-        KC_BTN5,        // GP28 - 進む
-        DRAG_SCROLL     // GP29 - ドラッグスクロール
+    /* 基本レイヤー（物理 KC_BTN4 は Back ボタンのまま） */
+    [_BASE] = LAYOUT_direct(
+        KC_BTN1, KC_BTN2, KC_BTN3, KC_BTN4, KC_BTN5,
+        MO(_SCROLL)                 // DRAG_SCROLL
+    ),
+
+    /* Drag-Scroll レイヤー */
+    [_SCROLL] = LAYOUT_direct(
+        CPI_TGL,  KC_TRNS,  KC_TRNS, SCRL_MODE, KC_TRNS,
+        KC_TRNS                    // DRAG_SCROLL キー自身（レイヤー維持）
     ),
 };
 
-// ドラッグスクロール状態管理
-static bool drag_scroll_enabled     = false;
-static bool cpi_low                 = false;    // false=デフォルト, true=低感度
-static bool primary_clicked_in_drag = false;
+/* ───── 状態フラグ ───── */
+static bool drag_scroll = false;
+static bool cpi_low    = false;
 
-static const uint16_t CPI_DEFAULT = PMW33XX_CPI; // config.h で定義されている
-static const uint16_t CPI_ALT     = CPI_DEFAULT / 3;
+/* スクロールモード（0:両,1:Y のみ,2:X のみ） */
+enum { SCROLL_BOTH = 0, SCROLL_YONLY, SCROLL_XONLY };
+static uint8_t scroll_mode = SCROLL_BOTH;
 
+/* ───── CPI 定数 ───── */
+static const uint16_t CPI_DEF    = PMW33XX_CPI;   // 例: 600 dpi
+static const uint16_t CPI_ALT    = CPI_DEF / 3;   // 例: 200 dpi
+static const uint16_t CPI_SCROLL = 50;            // Drag-Scroll 中固定
+
+/* ───── キー処理 ───── */
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     switch (keycode) {
-	/* --- Drag-Scroll ボタン ----------------------------------------- */ 
-        case DRAG_SCROLL:
-            if (record->event.pressed) {
-                // GP29が押されたときドラッグスクロールを有効化
-                drag_scroll_enabled = true;
-		primary_clicked_in_drag = false;        // 毎回リセット
-                pointing_device_set_cpi(100);           // スクロール用に低いCPIに変更
-            } else { /* DRAG_SCROLL released */
-                // GP29が離されたときドラッグスクロールを無効化
-                drag_scroll_enabled = false;
 
-		/* ホールド中に主ボタンが押されていたら CPI をトグル */
-                if (primary_clicked_in_drag) {
-                    cpi_low = !cpi_low;
-                }
-                pointing_device_set_cpi(cpi_low ? CPI_ALT : CPI_DEFAULT);
+        /* 左クリック → CPI_TGL に置換済み */
+        case CPI_TGL:
+            if (record->event.pressed)
+                cpi_low = !cpi_low;
+            return false;
+
+        /* SCRL_MODE：スクロール方向を循環 */
+        case SCRL_MODE:
+            if (drag_scroll && record->event.pressed) {
+                scroll_mode = (scroll_mode + 1) % 3;   // 0→1→2→0…
             }
-            return false;       // イベントを他へ流さない
-        
-        /* --- 主クリック -------------------------------------------------- */
-        case KC_BTN1:
-            if (drag_scroll_enabled) {
-                /* ホールド中はクリックを OS に送らずフラグだけ */
-                if (record->event.pressed) {
-                    primary_clicked_in_drag = true;         // 予約フラグを立てる
-                }
-                return false;   // ここでストップ
-            }
-            return true;        // 通常時はそのまま送る
+            return false;           // OS へ送らない（クリック無し）
+
     }
     return true;
 }
 
-// ポインティングデバイスの動作をカスタマイズ
+/* ───── レイヤー遷移で CPI 制御 ───── */
+layer_state_t layer_state_set_user(layer_state_t state) {
+    bool now_scroll = layer_state_cmp(state, _SCROLL);
+    if (now_scroll != drag_scroll) {
+        drag_scroll = now_scroll;
+        pointing_device_set_cpi(
+            drag_scroll ? CPI_SCROLL
+                        : (cpi_low ? CPI_ALT : CPI_DEF)
+        );
+    }
+    return state;
+}
+
+/* ───── ポインタ → スクロール変換 ───── */
 report_mouse_t pointing_device_task_user(report_mouse_t m) {
-    if (drag_scroll_enabled) {
-        // ドラッグスクロールモード時は、X/Y移動をスクロールに変換
-        m.h = m.x;      // 水平スクロール
-        m.v = -m.y;     // 垂直スクロール
-        m.x = 0;        // マウス移動を無効化
-        m.y = 0;
+    if (drag_scroll) {
+        switch (scroll_mode) {
+            case SCROLL_YONLY:
+                m.h = 0;
+                m.v = -m.y;
+                break;
+            case SCROLL_XONLY:
+                m.h =  m.x;
+                m.v = 0;
+                break;
+            default:               // SCROLL_BOTH
+                m.h =  m.x;
+                m.v = -m.y;
+        }
+        m.x = m.y = 0;             // マウス移動は常に無効化
     }
     return m;
 }
+
