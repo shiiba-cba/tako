@@ -5,7 +5,7 @@ enum layer_names { _BASE, _SCROLL };
 
 /* ───── 独自キーコード ───── */
 enum custom_keycodes {
-    CPI_TGL = SAFE_RANGE,   // 左クリック置換（既存）
+    CPI_TGL = SAFE_RANGE,   // CPI 切替
     SCRL_MODE               // スクロール方向切替
 };
 
@@ -32,16 +32,21 @@ static bool cpi_low    = false;
 enum { SCROLL_BOTH = 0, SCROLL_YONLY, SCROLL_XONLY };
 static uint8_t scroll_mode = SCROLL_BOTH;
 
+/* ---- スクロール平滑化用 ---- */
+#define SCROLL_UNIT  40        // Δが ±40cnt たまったら wheel ±1step 送る
+static int16_t rem_x = 0;
+static int16_t rem_y = 0;
+
 /* ───── CPI 定数 ───── */
 static const uint16_t CPI_DEF    = PMW33XX_CPI;   // 例: 600 dpi
 static const uint16_t CPI_ALT    = CPI_DEF / 3;   // 例: 200 dpi
-static const uint16_t CPI_SCROLL = 50;            // Drag-Scroll 中固定
+static const uint16_t CPI_SCROLL = CPI_DEF;       // Drag-Scroll 中固定
 
 /* ───── キー処理 ───── */
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     switch (keycode) {
 
-        /* 左クリック → CPI_TGL に置換済み */
+        /* CPI_TGL：CPI 状態を反転 */
         case CPI_TGL:
             if (record->event.pressed)
                 cpi_low = !cpi_low;
@@ -74,20 +79,25 @@ layer_state_t layer_state_set_user(layer_state_t state) {
 /* ───── ポインタ → スクロール変換 ───── */
 report_mouse_t pointing_device_task_user(report_mouse_t m) {
     if (drag_scroll) {
-        switch (scroll_mode) {
-            case SCROLL_YONLY:
-                m.h = 0;
-                m.v = -m.y;
-                break;
-            case SCROLL_XONLY:
-                m.h =  m.x;
-                m.v = 0;
-                break;
-            default:               // SCROLL_BOTH
-                m.h =  m.x;
-                m.v = -m.y;
+        /* ① Δを蓄積 */
+        rem_x += m.x;
+        rem_y += m.y;
+
+        /* ② SCROLL_UNIT ごとに ±1step へ変換 */
+        int8_t wheel_h = 0, wheel_v = 0;
+        if (scroll_mode != SCROLL_YONLY) {
+            while (rem_x >=  SCROLL_UNIT) { wheel_h++; rem_x -= SCROLL_UNIT; }
+            while (rem_x <= -SCROLL_UNIT) { wheel_h--; rem_x += SCROLL_UNIT; }
         }
-        m.x = m.y = 0;             // マウス移動は常に無効化
+        if (scroll_mode != SCROLL_XONLY) {
+            while (rem_y >=  SCROLL_UNIT) { wheel_v--; rem_y -= SCROLL_UNIT; } // Y反転
+            while (rem_y <= -SCROLL_UNIT) { wheel_v++; rem_y += SCROLL_UNIT; }
+        }
+
+        /* ③ HID レポートを生成 */
+        m.x = m.y = 0;   // ポインタ移動は無効
+        m.h = wheel_h;
+        m.v = wheel_v;
     }
     return m;
 }
